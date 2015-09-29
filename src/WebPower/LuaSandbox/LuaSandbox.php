@@ -5,10 +5,15 @@ use \Lua;
 
 class LuaSandbox
 {
+    /**
+     * @var callable
+     */
+    protected static $oldErrorHandler;
+
     /** @var Lua */
     private $sandbox;
 
-    function __construct()
+    public function __construct()
     {
         if (!extension_loaded('lua')) {
             throw new Exception('Lua PHP module not installed. See http://pecl.php.net/package/lua');
@@ -45,7 +50,7 @@ class LuaSandbox
         $this->assertValidIdentifier($name);
         try {
             $res = $this->sandbox->call($name, $args);
-        } catch(\LuaException $e) {
+        } catch (\LuaException $e) {
             throw new Exception('Sandbox failed to call function', 0, $e);
         }
 
@@ -68,9 +73,11 @@ class LuaSandbox
      */
     public function assignVar($name, $value)
     {
+        self::enableErrorHandler();
         $this->assertValidIdentifier($name);
         $this->sandbox->assign($name, $value);
-        $ret = $this->run('return _G["'.$name.'"]');
+        $ret = $this->run('return _G["' . $name . '"]');
+        self::disableErrorHandler();
         if ($ret != $value) {
             $this->unsetVar($name);
             throw new Exception(sprintf('Assigning Var with name: %s failed', $name));
@@ -79,7 +86,7 @@ class LuaSandbox
 
     public function unsetVar($name)
     {
-        foreach ((array) $name as $global) {
+        foreach ((array)$name as $global) {
             $this->assertValidIdentifier($global);
             $this->sandbox->assign($global, null);
         }
@@ -94,9 +101,27 @@ class LuaSandbox
     public function isValidIdentifier($name)
     {
         $reserved = array(
-            'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
-            'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
-            'return', 'then', 'true', 'until', 'while'
+            'and',
+            'break',
+            'do',
+            'else',
+            'elseif',
+            'end',
+            'false',
+            'for',
+            'function',
+            'if',
+            'in',
+            'local',
+            'nil',
+            'not',
+            'or',
+            'repeat',
+            'return',
+            'then',
+            'true',
+            'until',
+            'while'
         );
 
         $isReserved = in_array($name, $reserved);
@@ -110,17 +135,32 @@ class LuaSandbox
 
     private function tryRunStringOrFile($str, $file = false)
     {
+        self::enableErrorHandler();
+
         $level = error_reporting(0);
 
-        if (!$file)
-            $retval = $this->sandbox->eval($str);
-        else
-            $retval = $this->sandbox->include($str);
+        try {
+
+            if (!$file) {
+                $retval = $this->sandbox->eval($str);
+            } else {
+                $retval = $this->sandbox->include($str);
+            }
+
+
+        } catch (\ErrorException $exception) {
+
+            error_reporting($level);
+            throw new LuaErrorException('Error in parsed Lua: ', 0, $exception);
+
+        }
+        self::disableErrorHandler();
 
         error_reporting($level);
 
-        if ($retval === false)
+        if ($retval === false) {
             $this->throwLuaError(error_get_last());
+        }
 
         return $retval;
     }
@@ -138,5 +178,24 @@ class LuaSandbox
             $error['message'], 0, $error['type'], $error['file'], $error['line']
         );
         throw new LuaErrorException('Error in executed Lua', 0, $error);
+    }
+
+    protected static function enableErrorHandler()
+    {
+        self::$oldErrorHandler = set_error_handler(array(__CLASS__, 'handleError'));
+    }
+
+    protected static function disableErrorHandler()
+    {
+        if (self::$oldErrorHandler !== null) {
+            set_error_handler(self::$oldErrorHandler);
+            self::$oldErrorHandler = null;
+        }
+    }
+
+    public static function handleError($severity, $message, $file, $line)
+    {
+        self::disableErrorHandler();
+        throw new \ErrorException($message, 0, $severity, $file, $line);
     }
 }
